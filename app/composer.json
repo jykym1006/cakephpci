@@ -22,6 +22,7 @@
     "require-dev": {
         "pear/console_commandline": "@dev",
         "pear/pear_exception": "@dev",
-        "sizuhiko/Bdd": "dev-master"
+        "sizuhiko/Bdd": "dev-master",
+        "behat/mink-goutte-driver": "*"
     }
 }

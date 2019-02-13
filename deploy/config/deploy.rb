@@ -1,39 +1,78 @@
-# config valid for current version and patch releases of Capistrano
-lock "~> 3.11.0"
+set :application, 'blogapp'
+set :repo_url, 'git@github.com:jykym1006/cakephpci-app.git'
+set :deploy_to, '/var/www/application'
+set :linked_dirs, %w{tmp/cache tmp/cache/models tmp/cache/persistent tmp/cache/views tmp/logs tmp/sessions tmp/tests}
+set :linked_files, %w{production.php}
+set :log_level, :info
 
-set :application, "my_app_name"
-set :repo_url, "git@example.com:me/my_repo.git"
+framework_tasks = ["symlink:linked_dirs", "symlink:linked_files"]
+framework_tasks.each do |t|
+  Rake::Task["deploy:#{t}"].clear
+end
+set :password, ask('Server password:', nil)
 
-# Default branch is :master
-# ask :branch, `git rev-parse --abbrev-ref HEAD`.chomp
+namespace :deploy do
+  before :check, :create_app_dir do
+    on release_roles :app do |role|
+      execute :sudo, :mkdir, '-p', '/var/www/application'
+      execute :sudo, :chown, "#{host.user}:#{role.properties.group}", '/var/www/application'
+    end
+  end
 
-# Default deploy_to directory is /var/www/my_app_name
-# set :deploy_to, "/var/www/my_app_name"
+  namespace :check do
+    after :linked_dirs, :chown_linked_dirs do
+      on release_roles :app do |role|
+         execute :sudo, :find, shared_path, "-type d -print", "|", :xargs, :chmod, "777"
+      end
+    end
 
-# Default value for :format is :airbrussh.
-# set :format, :airbrussh
+    before :linked_files, :upload_app_config do
+      on release_roles :app do |role|
+        if (role.properties.app_config.instance_of?(String)) then
+          upload! "./config/deploy/#{role.properties.app_config}", shared_path
+        end
+      end
+    end
+  end
 
-# You can configure the Airbrussh format using :format_options.
-# These are the defaults.
-# set :format_options, command_output: true, log_file: "log/capistrano.log", color: :auto, truncate: :auto
+  after :updated, :composer_install do
+    on roles(:app) do
+      execute :composer, "--working-dir=#{release_path}/app", "--no-dev", :install
+    end
+  end
 
-# Default value for :pty is false
-# set :pty, true
+  after :updated, :migrate do
+    on release_roles :db do |role|
+      cake_env = role.properties.cake_env
 
-# Default value for :linked_files is []
-# append :linked_files, "config/database.yml"
+      execute "env CAKE_ENV=#{cake_env} #{release_path}/app/Console/cake Migrations.migration run all -p"
+    end
+  end
 
-# Default value for linked_dirs is []
-# append :linked_dirs, "log", "tmp/pids", "tmp/cache", "tmp/sockets", "public/system"
+  namespace :symlink do
+    task :linked_files do
+      on release_roles :app do |role|
+        if (role.properties.app_config.instance_of?(String)) then
+          target = release_path.join("app/Config/bootstrap/environments/#{role.properties.app_config}")
+          source = shared_path.join(role.properties.app_config)
+          execute :ln, '-s', source, target
+        end
+      end
+    end
 
-# Default value for default_env is {}
-# set :default_env, { path: "/opt/ruby/bin:$PATH" }
+    task :linked_dirs do
+      on release_roles :app do
+        target = release_path.join('app/tmp')
+        source = shared_path.join('tmp')
+        execute :sudo, :rm, '-rf', target
+        execute :ln, '-s', source, target
+      end
+    end
+  end
 
-# Default value for local_user is ENV['USER']
-# set :local_user, -> { `git config user.name`.chomp }
-
-# Default value for keep_releases is 5
-# set :keep_releases, 5
-
-# Uncomment the following to require manually verifying the host key before first deploy.
-# set :ssh_options, verify_host_key: :secure
+  after :published, :restart_php_fpm do
+    on release_roles :app do |role|
+      execute :sudo, :service, 'php5-fpm', :restart
+    end
+  end
+end
